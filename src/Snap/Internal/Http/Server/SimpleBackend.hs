@@ -25,7 +25,7 @@ import           Data.Maybe
 import           Data.Typeable
 import           Foreign hiding (new)
 import           Foreign.C
-import           GHC.Conc (labelThread, forkOnIO)
+import           GHC.Conc (labelThread)
 import           Network.Socket
 import           Prelude hiding (catch)
 ------------------------------------------------------------------------------
@@ -60,15 +60,13 @@ data EventLoopCpu = EventLoopCpu
 ------------------------------------------------------------------------------
 simpleEventLoop :: EventLoop
 simpleEventLoop defaultTimeout sockets cap elog handler = do
-    loops <- Prelude.mapM (newLoop defaultTimeout sockets handler elog)
-                          [0..(cap-1)]
-
-    debug "simpleEventLoop: waiting for mvars"
+    loop <- newLoop defaultTimeout sockets handler elog 0
+    debug "simpleEventLoop: waiting for mvar"
 
     --wait for all threads to exit
-    Prelude.mapM_ (takeMVar . _exitMVar) loops `finally` do
+    (takeMVar . _exitMVar) loop `finally` do
         debug "simpleEventLoop: killing all threads"
-        _ <- mapM_ stopLoop loops
+        _ <- stopLoop loop
         mapM_ Listen.closeSocket sockets
 
 
@@ -82,7 +80,7 @@ newLoop :: Int
 newLoop defaultTimeout sockets handler elog cpu = do
     tmgr       <- TM.initialize defaultTimeout getCurrentDateTime
     exit       <- newEmptyMVar
-    accThreads <- forM sockets $ \p -> forkOnIO cpu $
+    accThreads <- forM sockets $ \p -> forkIO $
                   acceptThread defaultTimeout handler tmgr elog cpu p exit
 
     return $ EventLoopCpu cpu accThreads tmgr exit
@@ -111,7 +109,7 @@ acceptThread defaultTimeout handler tmgr elog cpu sock exitMVar =
         debug $ "acceptThread: calling accept() on socket " ++ show sock
         (s,addr) <- accept $ Listen.listenSocket sock
         debug $ "acceptThread: accepted connection from remote: " ++ show addr
-        _ <- forkOnIO cpu (go s addr `catches` cleanup)
+        _ <- forkIO (go s addr `catches` cleanup)
         loop
 
     go = runSession defaultTimeout handler tmgr sock
